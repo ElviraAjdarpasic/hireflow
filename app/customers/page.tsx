@@ -8,6 +8,7 @@ type Customer = {
   name: string;
   created_at: string;
   email?: string | null;
+  role?: string;
 };
 
 export default function CustomersPage() {
@@ -15,6 +16,7 @@ export default function CustomersPage() {
 
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [showAdminForm, setShowAdminForm] = useState(false);
 
   const [companyName, setCompanyName] = useState("");
   const [email, setEmail] = useState("");
@@ -22,6 +24,8 @@ export default function CustomersPage() {
 
   const [loading, setLoading] = useState(false);
   const [loadingCustomers, setLoadingCustomers] = useState(true);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [role, setRole] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
@@ -40,6 +44,7 @@ export default function CustomersPage() {
     }
 
     const { data: profile } = await supabase.rpc("get_my_profile");
+    setRole(profile?.role ?? null);
 
     if (!profile || profile.role !== "admin") {
       window.location.href = "/dashboard";
@@ -50,6 +55,10 @@ export default function CustomersPage() {
   }
 
   async function loadCustomers() {
+    const {
+      data: { user: currentUser },
+    } = await supabase.auth.getUser();
+    setCurrentUserId(currentUser?.id || null);
     setLoadingCustomers(true);
 
     const { data, error } = await supabase
@@ -65,8 +74,8 @@ export default function CustomersPage() {
 
     const { data: users } = await supabase
       .from("users")
-      .select("id, customer_id")
-      .not("customer_id", "is", null);
+      .select("id, customer_id, full_name, role, created_at")
+      .order("created_at", { ascending: false });
 
     const emailByCustomerId = new Map<string, string | null>();
 
@@ -82,13 +91,88 @@ export default function CustomersPage() {
       }
     }
 
-    setCustomers(
-      (data || []).map((customer) => ({
-        ...customer,
-        email: emailByCustomerId.get(customer.id) || null,
-      }))
-    );
+    const customerRows = (data || []).map((customer) => ({
+      ...customer,
+      email: emailByCustomerId.get(customer.id) || null,
+      role: "customer",
+    }));
+
+    const adminRows = (users || [])
+      .filter((user) => user.role === "admin")
+      .map((user) => ({
+        id: user.id,
+        name: user.full_name || "Admin",
+        created_at: user.created_at,
+        email: null,
+        role: "admin",
+      }));
+
+    setCustomers([...customerRows, ...adminRows]);
     setLoadingCustomers(false);
+  }
+
+  function resetAdminForm() {
+    setCompanyName("");
+    setEmail("");
+    setPassword("");
+    setShowAdminForm(false);
+    setError("");
+    setSuccess("");
+  }
+
+  async function createAdminAccount(
+    event: React.FormEvent<HTMLFormElement>
+  ) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      if (!companyName.trim()) throw new Error("Ange ett namn.");
+      if (!email.trim()) throw new Error("Ange en e-postadress.");
+      if (password.length < 6) throw new Error("Lösenordet måste vara minst 6 tecken.");
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Du är inte inloggad.");
+
+      const response = await fetch("/api/admin/create-user", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+          full_name: companyName.trim(),
+          role: "admin",
+          customer_id: null,
+        }),
+      });
+
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Kunde inte skapa adminkontot.");
+
+      setSuccess(`Admin ${companyName.trim()} skapades och kan nu logga in.`);
+
+      setCustomers((current) => [
+        {
+          id: result.user?.id || `admin-${Date.now()}`,
+          name: companyName.trim(),
+          created_at: new Date().toISOString(),
+          email: email.trim(),
+          role: "admin",
+        },
+        ...current,
+      ]);
+
+      resetAdminForm();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Något gick fel.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   function resetForm() {
@@ -186,9 +270,9 @@ export default function CustomersPage() {
     }
   }
 
-  async function deleteCustomer(id: string) {
+  async function deleteCustomer(id: string, role?: string) {
     const confirmed = window.confirm(
-      "Är du säker på att du vill ta bort kunden?"
+      `Är du säker på att du vill ta bort ${role === "admin" ? "admin" : "kunden"}?`
     );
 
     if (!confirmed) {
@@ -198,18 +282,28 @@ export default function CustomersPage() {
     setError("");
     setSuccess("");
 
-    const { error } = await supabase
-      .from("customers")
-      .delete()
-      .eq("id", id);
+    const { data: { session } } = await supabase.auth.getSession();
 
-    if (error) {
-      setError(error.message);
+    if (!session) {
+      setError("Du är inte inloggad.");
       return;
     }
 
-    setSuccess("Kunden togs bort.");
+    const response = await fetch("/api/admin/delete-user", {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ id, role: role || "customer" }),
+    });
 
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setError(result.error || "Kunde inte ta bort användaren.");
+      return;
+    }
+    setSuccess(role === "admin" ? "Admin togs bort." : "Kunden togs bort.");
     await loadCustomers();
   }
 
@@ -326,11 +420,11 @@ export default function CustomersPage() {
 
               <div className="min-w-0">
                 <p className="truncate text-xs font-semibold">
-                  HireFlow Admin
+                  {role === "admin" ? "HireFlow Admin" : "HireFlow Kund"}
                 </p>
 
                 <p className="text-[10px] text-slate-400">
-                  Administratör
+                  {role === "admin" ? "Administratör" : "Kund"}
                 </p>
               </div>
             </div>
@@ -408,18 +502,36 @@ export default function CustomersPage() {
                   </p>
                 </div>
 
-                <button
-                  onClick={() => {
-                    setShowForm(!showForm);
-                    setError("");
-                    setSuccess("");
-                  }}
-                  className="inline-flex items-center justify-center gap-3 rounded-xl bg-[#18283a] px-6 py-3.5 text-xs font-bold text-white shadow-sm transition hover:bg-[#101c2a]"
-                >
-                  <span className="text-xl leading-none">+</span>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => {
+                      setShowForm(!showForm);
+                      setShowAdminForm(false);
+                      setError("");
+                      setSuccess("");
+                    }}
+                    className="inline-flex items-center justify-center gap-3 rounded-xl bg-[#18283a] px-6 py-3.5 text-xs font-bold text-white shadow-sm transition hover:bg-[#101c2a]"
+                  >
+                    <span className="text-xl leading-none">+</span>
 
-                  {showForm ? "Stäng" : "Ny kund"}
-                </button>
+                    {showForm ? "Stäng" : "Ny kund"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAdminForm(!showAdminForm);
+                      setShowForm(false);
+                      setError("");
+                      setSuccess("");
+                    }}
+                    className="inline-flex items-center justify-center gap-3 rounded-xl bg-[#18283a] px-6 py-3.5 text-xs font-bold text-white shadow-sm transition hover:bg-[#101c2a]"
+                  >
+                    <span className="text-xl leading-none">+</span>
+
+                    {showAdminForm ? "Stäng" : "Ny admin"}
+                  </button>
+                </div>
               </div>
             </div>
           </header>
@@ -436,6 +548,40 @@ export default function CustomersPage() {
                 <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-700">
                   {success}
                 </div>
+              )}
+
+              {showAdminForm && (
+                <form
+                  onSubmit={createAdminAccount}
+                  className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:p-6"
+                >
+                  <div className="mb-6">
+                    <p className="text-base font-bold text-slate-900">Ny admin</p>
+                    <p className="mt-1 text-xs text-slate-500">Skapa ett adminkonto.</p>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold">Namn</label>
+                      <input type="text" value={companyName} onChange={(event) => setCompanyName(event.target.value.split(" ").map((word) => word ? word.charAt(0).toUpperCase() + word.slice(1) : "").join(" "))} required placeholder="Förnamn Efternamn" className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[#2688ef] focus:ring-2 focus:ring-blue-100" />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold">E-post</label>
+                      <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="namn@foretag.se" className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[#2688ef] focus:ring-2 focus:ring-blue-100" />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold">Lösenord</label>
+                      <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={6} placeholder="Minst 6 tecken" className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[#2688ef] focus:ring-2 focus:ring-blue-100" />
+                    </div>
+                  </div>
+
+                  <div className="mt-5 flex gap-3">
+                    <button type="submit" disabled={loading} className="rounded-lg bg-[#18283a] px-4 py-2.5 text-xs font-bold text-white transition hover:bg-[#101c2a] disabled:opacity-50">
+                      {loading ? "Sparar..." : "Skapa admin"}
+                    </button>
+                    <button type="button" onClick={resetAdminForm} className="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Avbryt</button>
+                  </div>
+                </form>
               )}
 
               {showForm && (
@@ -551,9 +697,10 @@ export default function CustomersPage() {
               </div>
 
               <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                <div className="hidden grid-cols-[2fr_1fr_120px] gap-5 border-b border-slate-200 bg-slate-50 px-5 py-3 text-[10px] font-bold uppercase tracking-wide text-slate-500 md:grid">
+                <div className="hidden grid-cols-[1.7fr_110px_110px_100px] gap-5 border-b border-slate-200 bg-slate-50 px-5 py-3 text-[10px] font-bold uppercase tracking-wide text-slate-500 md:grid">
                   <div>Företag</div>
-                  <div>Skapad</div>
+                  <div className="text-center">Roll</div>
+                  <div className="text-center">Skapad</div>
                   <div className="text-right">Åtgärd</div>
                 </div>
 
@@ -586,7 +733,7 @@ export default function CustomersPage() {
                         key={customer.id}
                         className="border-b border-slate-100 px-5 py-5 transition last:border-b-0 hover:bg-slate-50"
                       >
-                        <div className="grid gap-4 md:grid-cols-[2fr_1fr_120px] md:items-center">
+                        <div className="grid gap-4 md:grid-cols-[1.7fr_110px_110px_100px] md:items-center">
                           <div className="flex items-center gap-3">
                             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#e9ddff] text-xs font-bold text-[#6842a5]">
                               {customer.name.slice(0, 2).toUpperCase()}
@@ -596,7 +743,6 @@ export default function CustomersPage() {
                               <p className="truncate text-base font-bold text-slate-900">
                                 {customer.name}
                               </p>
-
                               <p className="mt-1 text-xs text-slate-500 md:hidden">
                                 Skapad{" "}
                                 {new Date(
@@ -606,19 +752,25 @@ export default function CustomersPage() {
                             </div>
                           </div>
 
-                          <div className="hidden text-xs text-slate-500 md:block">
+                          <div className="hidden text-center text-xs font-semibold text-slate-600 md:block">
+                            {customer.role === "admin" ? "Admin" : "Kund"}
+                          </div>
+
+                          <div className="hidden text-center text-xs text-slate-500 md:block">
                             {new Date(
                               customer.created_at
                             ).toLocaleDateString("sv-SE")}
                           </div>
 
                           <div className="flex flex-nowrap items-center justify-start gap-2 md:justify-end">
-                            <button
-                              onClick={() => deleteCustomer(customer.id)}
+                            {!(customer.role === "admin" && customer.id === currentUserId) && (
+                    <button
+                              onClick={() => deleteCustomer(customer.id, customer.role)}
                               className="rounded-lg border border-red-200 bg-white px-3 py-2 text-[10px] font-semibold text-red-600 transition hover:bg-red-50"
                             >
                               Ta bort
                             </button>
+                  )}
                           </div>
                         </div>
                       </div>

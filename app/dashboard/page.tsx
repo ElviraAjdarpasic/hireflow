@@ -44,6 +44,7 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [role, setRole] = useState<string | null>(null);
   const [roleLoaded, setRoleLoaded] = useState(false);
+  const [userName, setUserName] = useState("Admin");
 
   useEffect(() => {
     startDashboard();
@@ -71,6 +72,7 @@ export default function Dashboard() {
     const { data: profile } = await supabase.rpc("get_my_profile");
 
     setRole(profile?.role ?? null);
+    setUserName(profile?.full_name || (profile?.role === "admin" ? "Admin" : "Kund"));
     setRoleLoaded(true);
 
     await loadData();
@@ -298,11 +300,11 @@ export default function Dashboard() {
 
               <div className="min-w-0">
                 <p className="truncate text-xs font-semibold">
-                  HireFlow Admin
+                  {role === "admin" ? "HireFlow Admin" : "HireFlow Kund"}
                 </p>
 
                 <p className="text-[10px] text-slate-400">
-                  Administratör
+                  {role === "admin" ? "Administratör" : "Kund"}
                 </p>
               </div>
             </div>
@@ -374,7 +376,7 @@ export default function Dashboard() {
           <header className="border-b border-slate-200 bg-[#f8f9fb] px-6 py-7 md:px-12 md:py-8">
             <div className="mx-auto max-w-[1380px]">
               <h1 className="text-[32px] font-semibold tracking-tight text-[#101820] md:text-[36px]">
-                Översikt
+                Välkommen, {userName} 
               </h1>
 
               <p className="mt-2 text-sm text-slate-500 md:text-[15px]">

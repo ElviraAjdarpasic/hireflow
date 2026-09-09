@@ -150,6 +150,7 @@ export default function RecruitmentsPage() {
 
     try {
       const customerId = await getCustomerId();
+      console.log("CUSTOMER ID:", customerId);
 
       const formattedTitle =
         title.trim().charAt(0).toUpperCase() +
@@ -513,11 +514,11 @@ export default function RecruitmentsPage() {
 
               <div className="min-w-0">
                 <p className="truncate text-xs font-semibold">
-                  HireFlow Admin
+                  {role === "admin" ? "HireFlow Admin" : "HireFlow Kund"}
                 </p>
 
                 <p className="text-[10px] text-slate-400">
-                  Administratör
+                  {role === "admin" ? "Administratör" : "Kund"}
                 </p>
               </div>
             </div>

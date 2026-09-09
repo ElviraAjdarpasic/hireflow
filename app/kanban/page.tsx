@@ -563,11 +563,11 @@ export default function KanbanPage() {
               <div className="min-w-0">
 
                 <p className="truncate text-xs font-semibold">
-                  HireFlow Admin
+                  {role === "admin" ? "HireFlow Admin" : "HireFlow Kund"}
                 </p>
 
                 <p className="text-[10px] text-slate-400">
-                  Administratör
+                  {role === "admin" ? "Administratör" : "Kund"}
                 </p>
 
               </div>
